@@ -1,0 +1,145 @@
+# Lunar Landslide Prototype Configuration
+# Centralized configuration for thresholds, parameters, and settings
+
+# Photometric Correction Parameters
+photometric:
+  # Solar parameters (from TMC header)
+  sun_elevation_degrees: 41.3
+  incidence_angle_degrees: 48.7
+  
+  # Hapke model parameters
+  albedo_mare_regolith: 0.11
+  emission_angle_degrees: 0  # nadir viewing
+  
+  # Tile processing
+  tile_size: 512
+
+# Terrain Analysis Parameters
+terrain:
+  # RichDEM parameters
+  gaussian_smoothing_sigma: 1.0
+  
+  # Slope/curvature thresholds
+  slope_threshold_degrees: 25
+  curvature_threshold: -0.15  # negative for concave
+
+# Texture Analysis Parameters
+texture:
+  # GLCM parameters
+  glcm_window_size: 32
+  glcm_distance: 1
+  glcm_angle: 0
+  
+  # Performance optimization
+  glcm_block_size: 256
+  glcm_n_workers: null  # auto-detect CPU count
+  
+  # Contrast threshold (percentile)
+  contrast_percentile: 90
+
+# Boulder Detection Parameters
+boulder:
+  # Laplacian-of-Gaussian scales
+  log_min_sigma: 1
+  log_max_sigma: 3
+  log_scales: [1, 2, 3]
+  
+  # Detection thresholds
+  threshold_factor: 3  # times standard deviation
+  
+  # Size constraints
+  min_diameter_meters: 2.0
+  max_diameter_meters: 50.0
+
+# Machine Learning Parameters
+ml:
+  # Training parameters
+  epochs_unet: 40
+  epochs_yolo: 15
+  batch_size: 8
+  learning_rate: 0.001
+  
+  # Data split
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+  
+  # Early stopping
+  patience: 5
+  
+  # Performance targets
+  target_iou: 0.50
+  target_ap50: 0.65
+  target_precision: 0.70
+
+# Data Processing Parameters
+data:
+  # Spatial resolution targets
+  ohrc_resolution_meters: 0.25
+  tmc_dtm_resolution_meters: 5.0
+  
+  # Compression settings
+  cog_compression: "LZW"
+  cog_tiled: true
+  
+  # Coordinate systems
+  target_crs: "EPSG:104903"  # Selenographic equirectangular
+
+# Performance Constraints
+performance:
+  # Resource limits
+  max_memory_gb: 16
+  max_processing_time_minutes: 20
+  
+  # GDAL optimization
+  gdal_cache_mb: 1024
+  gdal_threads: 4
+  
+  # Progress reporting
+  progress_update_interval: 10000  # pixels
+
+# Quality Assurance
+quality:
+  # Co-registration accuracy
+  gcp_rmse_threshold_pixels: 0.5
+  min_gcp_points: 10
+  
+  # Data validation
+  min_valid_pixels_percent: 80
+  max_cloud_cover_percent: 10
+
+# File Naming Conventions
+naming:
+  # Suffixes
+  cog_suffix: "_cog.tif"
+  cosine_suffix: "_cosine.tif"
+  hapke_suffix: "_hapke.tif"
+  slope_suffix: "_slope_degrees.tif"
+  curvature_suffix: "_curvature.tif"
+  
+  # Output patterns
+  landslide_polygons: "landslide_polygons.shp"
+  boulder_seeds: "boulder_seeds.shp"
+  final_results: "aoi_landslide_boulder.gpkg"
+
+# Annotation Guidelines
+annotation:
+  # Landslide requirements
+  min_landslide_polygons: 30
+  landslide_confidence_scale: [1, 2, 3, 4, 5]
+  
+  # Boulder requirements  
+  min_boulder_annotations: 300
+  boulder_bbox_format: "xyxy"  # x1,y1,x2,y2
+
+# Validation Thresholds
+validation:
+  # Minimum file sizes (MB)
+  min_image_size_mb: 10
+  min_dtm_size_mb: 5
+  
+  # Maximum processing times (seconds)
+  max_step_time_seconds: 1200  # 20 minutes per step
+  
+  # Data quality checks
+  max_nodata_percent: 20

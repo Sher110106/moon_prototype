@@ -1,0 +1,27 @@
+name: moonai
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - gdal=3.8
+  - rasterio
+  - rioxarray
+  - richdem
+  - scikit-image
+  - pytorch
+  - pytorch-lightning
+  - cudatoolkit=11.8
+  - albumentations
+  - ultralytics
+  - geopandas
+  - scikit-learn
+  - jupyterlab
+  - numpy
+  - matplotlib
+  - contextily
+  - segmentation-models-pytorch
+  - pip
+  - pyyaml
+  - pip:
+    - pradan-cli
