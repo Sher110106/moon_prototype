@@ -108,7 +108,9 @@ def step_8_ml_models() -> float:
         Path(__file__).parent / "scripts" / "08_light_ml_models.py",
         "ML models training script"
     )
-    cmd = ["python", str(script_path)]
+    data_dir = str(Path(__file__).parent / "data")
+    output_dir = str(Path(__file__).parent / "outputs" / "models")
+    cmd = ["python", str(script_path), data_dir, output_dir]
     return run_command(cmd, "Light ML Models Training")
 
 def step_9_fusion() -> float:
@@ -117,7 +119,21 @@ def step_9_fusion() -> float:
         Path(__file__).parent / "scripts" / "09_fusion_and_filter.py",
         "Fusion and filtering script"
     )
-    cmd = ["python", str(script_path)]
+    project_root = Path(__file__).parent
+    model_dir = str(project_root / "outputs" / "models")
+    tmc_path = str(project_root / "data" / "tmc_ortho_cog.tif")
+    slope_path = str(project_root / "data" / "slope_degrees.tif")
+    curv_path = str(project_root / "data" / "curvature.tif")
+    aspect_path = str(project_root / "data" / "aspect_degrees.tif")
+    # Use the first reprojected OHRC file
+    import glob
+    ohrc_candidates = glob.glob(str(project_root / "data" / "*_ohrc*_eq.tif"))
+    ohrc_path = ohrc_candidates[0] if ohrc_candidates else str(project_root / "data" / "ohrc_coreg.tif")
+    output_dir = str(project_root / "outputs")
+    cmd = [
+        "python", str(script_path),
+        model_dir, tmc_path, slope_path, curv_path, aspect_path, ohrc_path, output_dir
+    ]
     return run_command(cmd, "Cross-scale Fusion & Physics Filter")
 
 def step_10_metrics() -> float:
@@ -126,7 +142,12 @@ def step_10_metrics() -> float:
         Path(__file__).parent / "scripts" / "10_metrics_audit.py",
         "Metrics audit script"
     )
-    cmd = ["python", str(script_path)]
+    project_root = Path(__file__).parent
+    model_dir = str(project_root / "outputs" / "models")
+    data_dir = str(project_root / "data")
+    fusion_results = str(project_root / "outputs" / "aoi_landslide_boulder.gpkg")
+    output_dir = str(project_root / "outputs")
+    cmd = ["python", str(script_path), model_dir, data_dir, fusion_results, output_dir]
     return run_command(cmd, "Metrics & Runtime Audit")
 
 def step_11_visuals() -> float:
@@ -135,7 +156,9 @@ def step_11_visuals() -> float:
         Path(__file__).parent / "scripts" / "11_visuals_packaging.py",
         "Visuals and packaging script"
     )
-    cmd = ["python", str(script_path)]
+    project_root = Path(__file__).parent
+    output_dir = str(project_root / "outputs")
+    cmd = ["python", str(script_path), str(project_root), output_dir]
     return run_command(cmd, "Visuals & Packaging")
 
 def main():

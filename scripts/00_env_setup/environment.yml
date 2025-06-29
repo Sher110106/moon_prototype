@@ -21,6 +21,11 @@ dependencies:
   - matplotlib
   - contextily
   - segmentation-models-pytorch
+  - opencv-python-headless
+  - scipy
+  - seaborn
+  - timm
+  - torchvision
   - pip
   - pyyaml
   - pip:

@@ -24,11 +24,13 @@ import cv2
 from pathlib import Path
 import json
 import warnings
-warnings.filterwarnings('ignore')
+from skimage.morphology import skeletonize
 
 # Import model architectures
 from ultralytics import YOLO
 import segmentation_models_pytorch as smp
+
+from utils import load_config
 
 def load_models(model_dir):
     """Load trained U-Net and YOLO models."""
@@ -246,37 +248,90 @@ def validate_with_yolo(yolo_model, ohrc_crop):
         area = np.sum(mask > 0.5)
         if area > 10:  # Minimum area threshold
             diameter = 2 * np.sqrt(area / np.pi)
-            boulders.append({'area': area, 'diameter': diameter})
+            boulders.append({'area': area, 'diameter': diameter, 'mask': mask})
     
     has_boulders = len(boulders) > 0
     return has_boulders, boulders
 
-def physics_shadow_filter(boulders, solar_elevation=41.3):
-    """Apply physics-based shadow filter to boulder detections."""
+def estimate_boulder_height(mask, ohrc_crop, pixel_size_m, sun_elev_deg, sun_az_deg,
+                            slope_deg, aspect_deg):
+    """Estimate boulder height using shadow skeleton length and slope-aware correction.
+
+    Args:
+        mask: 2-D boolean numpy array for one boulder (YOLO mask resized to crop).
+        ohrc_crop: 2-D grayscale numpy array of the same size as mask.
+        pixel_size_m: OHRC pixel size in metres (≈0.23).
+        sun_elev_deg: Solar elevation angle.
+        sun_az_deg: Solar azimuth angle east of north.
+        slope_deg: Local slope in degrees.
+        aspect_deg: Local aspect in degrees.
+    Returns:
+        height in metres or None if shadow not found.
+    """
+    # 1. shadow extraction – assume shadows are darker than 30 % percentile
+    thresh_val = np.percentile(ohrc_crop, 30)
+    shadow = (ohrc_crop < thresh_val).astype(np.uint8)
+
+    # Remove the boulder body from shadow mask to avoid self-mask
+    shadow[mask > 0.5] = 0
+
+    # Skeletonize the shadow mask
+    if np.count_nonzero(shadow) < 10:
+        return None
+    skel = skeletonize(shadow > 0)
+    coords = np.column_stack(np.nonzero(skel))
+    if coords.shape[0] < 5:
+        return None
+
+    # PCA for main axis = shadow direction
+    mean = coords.mean(axis=0)
+    centered = coords - mean
+    _, s, vt = np.linalg.svd(centered, full_matrices=False)
+    length_px = s[0] * 2 / shadow.shape[0]  # approximate – scale factor cancels later
+    # Better: project coords on principal axis and get range
+    vec = vt[0]
+    proj = centered @ vec
+    length_px = proj.max() - proj.min()
+    if length_px <= 0:
+        return None
+
+    L = length_px * pixel_size_m  # metres
+    # Slope component along sun plane
+    beta_parallel = slope_deg * np.cos(np.deg2rad(sun_az_deg - aspect_deg))
+    h = L * np.tan(np.deg2rad(sun_elev_deg)) + L * np.tan(np.deg2rad(beta_parallel))
+    return max(h, 0.01)
+
+def physics_shadow_filter(boulders, ohrc_crop, pixel_size_m, sun_elev, sun_az,
+                          slope_raster, aspect_raster, transform):
+    """Advanced physics validity check using height/diameter ratio."""
     if not boulders:
-        return True
-    
-    solar_elevation_rad = np.deg2rad(solar_elevation)
-    valid_boulders = []
-    
-    for boulder in boulders:
-        diameter = boulder['diameter']
-        
-        # Estimate shadow length (simplified)
-        # L = d / tan(solar_elevation)
-        shadow_length = diameter / np.tan(solar_elevation_rad)
-        
-        # Height from shadow: h = L * tan(solar_elevation)
-        estimated_height = shadow_length * np.tan(solar_elevation_rad)
-        
-        # Sanity check: height/diameter ratio should be reasonable
-        height_diameter_ratio = estimated_height / diameter
-        
-        # Accept if ratio is reasonable (< 3)
-        if height_diameter_ratio < 3.0:
-            valid_boulders.append(boulder)
-    
-    return len(valid_boulders) > 0
+        return False
+
+    valid_count = 0
+    for b in boulders:
+        y, x = np.argwhere(b['mask'] > 0.5)[0]
+        # Convert crop pixel to world coords using transform of crop
+        # transform is window transform; we approximate by center pixel
+        world_x, world_y = rasterio.transform.xy(transform, y, x)
+
+        # Sample slope & aspect rasters at this location
+        try:
+            slope_value = list(slope_raster.sample([(world_x, world_y)]))[0][0]
+            aspect_value = list(aspect_raster.sample([(world_x, world_y)]))[0][0]
+        except Exception:
+            slope_value = 0.0
+            aspect_value = 0.0
+
+        h = estimate_boulder_height(b['mask'], ohrc_crop, pixel_size_m,
+                                     sun_elev, sun_az,
+                                     slope_value, aspect_value)
+        if h is None:
+            continue
+        ratio = h / b['diameter']
+        if 0.5 < ratio < 2.5:
+            valid_count += 1
+
+    return valid_count > 0
 
 def calculate_mean_slope(polygon, slope_path):
     """Calculate mean slope within polygon."""
@@ -295,12 +350,22 @@ def calculate_mean_slope(polygon, slope_path):
     except:
         return 0.0
 
-def fusion_and_filter(landslide_polygons, ohrc_path, slope_path, yolo_model, min_slope_threshold=18.0):
+def fusion_and_filter(landslide_polygons, ohrc_path, slope_path, aspect_path, yolo_model,
+                      min_slope_threshold=18.0):
     """Main fusion and filtering pipeline."""
     validated_polygons = []
     
     print(f"Processing {len(landslide_polygons)} landslide candidates...")
     
+    # Load config for sun parameters
+    cfg = load_config()
+    sun_elev = cfg['photometric'].get('sun_elevation_degrees', 41.3)
+    sun_az = cfg['photometric'].get('sun_azimuth_degrees', 135.0)
+
+    # Open slope and aspect rasters once
+    slope_src = rasterio.open(slope_path)
+    aspect_src = rasterio.open(aspect_path) if aspect_path and os.path.exists(aspect_path) else None
+
     for idx, row in landslide_polygons.iterrows():
         polygon = row.geometry
         centroid = polygon.centroid
@@ -309,13 +374,18 @@ def fusion_and_filter(landslide_polygons, ohrc_path, slope_path, yolo_model, min
         mean_slope = calculate_mean_slope(polygon, slope_path)
         
         # Crop OHRC around centroid
-        ohrc_crop, _ = crop_ohrc_window(ohrc_path, centroid, size=512)
+        ohrc_crop, crop_transform = crop_ohrc_window(ohrc_path, centroid, size=512)
         
         # Validate with YOLO
         has_boulders, boulders = validate_with_yolo(yolo_model, ohrc_crop)
         
-        # Apply physics filter
-        physics_valid = physics_shadow_filter(boulders)
+        # Apply physics filter with advanced check
+        if aspect_src is not None:
+            physics_valid = physics_shadow_filter(
+                boulders, ohrc_crop, 0.23, sun_elev, sun_az,
+                slope_src, aspect_src, crop_transform)
+        else:
+            physics_valid = False
         
         # Decision logic
         validated = False
@@ -361,20 +431,26 @@ def fusion_and_filter(landslide_polygons, ohrc_path, slope_path, yolo_model, min
     print(f"  By boulders: {(result_gdf['validation_reason'] == 'boulder_detected').sum()}")
     print(f"  By slope: {(result_gdf['validation_reason'] == 'high_slope').sum()}")
     
+    # Close rasters
+    slope_src.close()
+    if aspect_src is not None:
+        aspect_src.close()
+
     return result_gdf
 
 def main():
     """Main fusion and filtering pipeline."""
-    if len(sys.argv) < 6:
-        print("Usage: python 09_fusion_and_filter.py <model_dir> <tmc_path> <slope_path> <curv_path> <ohrc_path> [output_dir]")
+    if len(sys.argv) < 7:
+        print("Usage: python 09_fusion_and_filter.py <model_dir> <tmc_path> <slope_path> <curv_path> <aspect_path> <ohrc_path> [output_dir]")
         sys.exit(1)
     
     model_dir = sys.argv[1]
     tmc_path = sys.argv[2]
     slope_path = sys.argv[3]
     curv_path = sys.argv[4]
-    ohrc_path = sys.argv[5]
-    output_dir = sys.argv[6] if len(sys.argv) > 6 else "outputs"
+    aspect_path = sys.argv[5]
+    ohrc_path = sys.argv[6]
+    output_dir = sys.argv[7] if len(sys.argv) > 7 else "outputs"
     
     os.makedirs(output_dir, exist_ok=True)
     
@@ -394,7 +470,7 @@ def main():
     
     print("Running fusion and filtering...")
     validated_results = fusion_and_filter(
-        landslide_polygons, ohrc_path, slope_path, yolo_model
+        landslide_polygons, ohrc_path, slope_path, aspect_path, yolo_model
     )
     
     # Save results

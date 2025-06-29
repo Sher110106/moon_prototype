@@ -6,6 +6,8 @@ photometric:
   # Solar parameters (from TMC header)
   sun_elevation_degrees: 41.3
   incidence_angle_degrees: 48.7
+  # Approximate or metadata-derived solar azimuth (east of north, degrees)
+  sun_azimuth_degrees: 135.0
   
   # Hapke model parameters
   albedo_mare_regolith: 0.11

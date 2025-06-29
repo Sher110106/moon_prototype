@@ -36,7 +36,7 @@ def compute_terrain_derivatives(dem_file):
         dem_file: Path to input DEM file
     
     Returns:
-        Tuple of (slope, curvature, original_dem)
+        Tuple of (slope, curvature, aspect, original_dem)
     """
     print(f"Loading DEM: {dem_file}")
     
@@ -64,15 +64,20 @@ def compute_terrain_derivatives(dem_file):
     print("Computing curvature...")
     curvature = rd.TerrainAttribute(dem_rd, attrib="curvature")
     
-    return slope, curvature, dem_xr, dem_filtered
+    # Compute aspect (degrees 0-360)
+    print("Computing aspect...")
+    aspect = rd.TerrainAttribute(dem_rd, attrib="aspect")
+    
+    return slope, curvature, aspect, dem_xr, dem_filtered
 
-def save_terrain_products(slope, curvature, dem_filtered, original_dem, output_dir):
+def save_terrain_products(slope, curvature, aspect, dem_filtered, original_dem, output_dir):
     """
     Save terrain derivative products to files
     
     Args:
         slope: Slope array
         curvature: Curvature array
+        aspect: Aspect array
         dem_filtered: Filtered DEM array
         original_dem: Original DEM xarray
         output_dir: Output directory path
@@ -107,6 +112,17 @@ def save_terrain_products(slope, curvature, dem_filtered, original_dem, output_d
     curvature_xr.rio.to_raster(curvature_file, compress="lzw")
     print(f"Saved curvature: {curvature_file}")
     
+    # Save aspect
+    aspect_file = output_dir / "aspect_degrees.tif"
+    aspect_xr = rxr.DataArray(
+        aspect,
+        dims=["y", "x"],
+        coords={"y": original_dem.y, "x": original_dem.x}
+    )
+    aspect_xr.rio.write_crs(crs, inplace=True)
+    aspect_xr.rio.to_raster(aspect_file, compress="lzw")
+    print(f"Saved aspect: {aspect_file}")
+    
     # Save filtered DEM
     dem_filtered_file = output_dir / "dem_filtered.tif"
     dem_filtered_xr = rxr.DataArray(
@@ -118,15 +134,16 @@ def save_terrain_products(slope, curvature, dem_filtered, original_dem, output_d
     dem_filtered_xr.rio.to_raster(dem_filtered_file, compress="lzw")
     print(f"Saved filtered DEM: {dem_filtered_file}")
     
-    return slope_file, curvature_file, dem_filtered_file
+    return slope_file, curvature_file, aspect_file, dem_filtered_file
 
-def print_statistics(slope, curvature, dem_filtered):
+def print_statistics(slope, curvature, aspect, dem_filtered):
     """
     Print statistics for terrain derivatives
     
     Args:
         slope: Slope array
         curvature: Curvature array
+        aspect: Aspect array
         dem_filtered: Filtered DEM array
     """
     print("\n=== Terrain Derivatives Statistics ===")
@@ -148,6 +165,12 @@ def print_statistics(slope, curvature, dem_filtered):
     print(f"  Max: {curvature.max():.4f}")
     print(f"  Mean: {curvature.mean():.4f}")
     print(f"  Std: {curvature.std():.4f}")
+
+    print(f"\nAspect (degrees):")
+    print(f"  Min: {aspect.min():.2f}")
+    print(f"  Max: {aspect.max():.2f}")
+    print(f"  Mean: {aspect.mean():.2f}")
+    print(f"  Std: {aspect.std():.2f}")
 
 def main():
     """Main terrain derivatives workflow"""
@@ -175,20 +198,21 @@ def main():
     
     try:
         # Compute terrain derivatives
-        slope, curvature, original_dem, dem_filtered = compute_terrain_derivatives(dtm_file)
+        slope, curvature, aspect, original_dem, dem_filtered = compute_terrain_derivatives(dtm_file)
         
         # Save products
-        slope_file, curvature_file, dem_filtered_file = save_terrain_products(
-            slope, curvature, dem_filtered, original_dem, "."
+        slope_file, curvature_file, aspect_file, dem_filtered_file = save_terrain_products(
+            slope, curvature, aspect, dem_filtered, original_dem, "."
         )
         
         # Print statistics
-        print_statistics(slope, curvature, dem_filtered)
+        print_statistics(slope, curvature, aspect, dem_filtered)
         
         print("\n=== Terrain Derivatives Complete ===")
         print("Generated files:")
         print(f"- slope_degrees.tif (Slope in degrees)")
         print(f"- curvature.tif (Profile curvature)")
+        print(f"- aspect_degrees.tif (Aspect in degrees 0-360)")
         print(f"- dem_filtered.tif (Gaussian filtered DEM)")
         
         print("\nNote: Files are ready for use in rule-based baseline processing")

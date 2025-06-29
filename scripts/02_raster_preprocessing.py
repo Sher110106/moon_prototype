@@ -10,6 +10,7 @@ Raster Preprocessing Script for Lunar Landslide Prototype
 import os
 import glob
 import sys
+import subprocess  # Needed for gdalinfo call
 from pathlib import Path
 from typing import List, Optional
 from utils import run_command_capture, validate_files_exist, print_array_stats
@@ -43,45 +44,37 @@ def convert_to_cog():
             str(input_path),
             output_file,
             "-co", "TILED=YES",
-            "-co", "COMPRESS=LZW", 
+            "-co", "COMPRESS=LZW",
+            "-co", "BIGTIFF=IF_SAFER",  # handle >4 GB rasters
             "-co", "COPY_SRC_OVERVIEWS=YES"
         ]
         
         run_command_capture(cmd, f"Converting {f} to COG")
 
 def reproject_ohrc():
-    """2-B: Reproject OHRC to selenographic equirectangular"""
+    """2-B: Reproject each OHRC scene individually to EPSG:104903"""
     print("\n=== Step 2-B: Reprojecting OHRC to EPSG:104903 ===")
-    
-    # Find OHRC COG files
+
     ohrc_files = glob.glob("*ohrc*_cog.tif")
-    
     if not ohrc_files:
         print("No OHRC COG files found")
         return
-    
-    # Build command with all OHRC files
-    cmd = [
-        "gdalwarp",
-        "-t_srs", "EPSG:104903",
-        "-tr", "0.25", "0.25",
-        "-r", "cubic",
-        "-of", "COG"
-    ]
-    
-    # Add all input files
-    for ohrc_file in ohrc_files:
-        if Path(ohrc_file).exists():
-            cmd.append(str(ohrc_file))
-    
-    # Add output file
-    cmd.append("ohrc_eq.tif")
-    
-    if len(cmd) < 10:  # Basic sanity check (should have at least one input)
-        print("Error: No valid OHRC input files found")
-        return
-    
-    run_command_capture(cmd, "Reprojecting OHRC to equirectangular")
+
+    for infile in ohrc_files:
+        out_file = f"{Path(infile).stem}_eq.tif"
+        cmd = [
+            "gdalwarp",
+            "-t_srs", "EPSG:104903",
+            "-tr", "0.25", "0.25",
+            "-r", "cubic",
+            "-of", "COG",
+            "-co", "TILED=YES",
+            "-co", "COMPRESS=LZW",
+            "-co", "BIGTIFF=IF_SAFER",
+            infile,
+            out_file
+        ]
+        run_command_capture(cmd, f"Reprojecting {infile} -> {out_file}")
 
 def snap_dtm_grid():
     """2-C: Snap grids (align all rasters to common 5m lattice)"""
@@ -125,9 +118,15 @@ def snap_dtm_grid():
     
     # Snap DTM to grid
     cmd = [
-        "gdal_translate",
-        "-a_srs", "EPSG:104903",
+        "gdalwarp",
+        "-t_srs", "EPSG:104903",
         "-tr", "5", "5",
+        "-tap",  # snap to grid of reference raster
+        "-r", "bilinear",
+        "-of", "COG",
+        "-co", "TILED=YES",
+        "-co", "COMPRESS=LZW",
+        "-co", "BIGTIFF=IF_SAFER",
         str(tmc_dtm_path),
         "dtm_snap.tif"
     ]

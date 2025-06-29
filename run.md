@@ -163,8 +163,8 @@ bash scripts/01_data_acquisition.sh
 ```
 data/
 ├── aoi.geojson                    # Area of Interest definition
-├── ch2_tmc_*_oth_*.img           # TMC Ortho raw imagery
-├── ch2_tmc_*_dtm_*.img           # TMC-DTM elevation data
+├── ch2_tmc_*_oth_*.tif           # TMC Ortho GeoTIFF imagery
+├── ch2_tmc_*_dtm_*.tif           # TMC-DTM GeoTIFF elevation data
 └── ch2_ohrc_*_img_*.img          # OHRC high-resolution imagery
 ```
 
@@ -192,8 +192,8 @@ data/
 - GDAL properly configured with optimization settings
 
 #### Input Files Required
-- `data/ch2_tmc_*_oth_*.img` (TMC Ortho)
-- `data/ch2_tmc_*_dtm_*.img` (TMC-DTM)
+- `data/ch2_tmc_*_oth_*.tif` (TMC Ortho)
+- `data/ch2_tmc_*_dtm_*.tif` (TMC-DTM)
 - `data/ch2_ohrc_*_img_*.img` (OHRC)
 
 #### Execution Command
@@ -206,7 +206,7 @@ cd data && python ../scripts/02_raster_preprocessing.py
 ```
 
 #### What This Step Does
-1. **COG Conversion**: Converts raw .img files to Cloud-Optimized GeoTIFF
+1. **COG Conversion**: Converts source GeoTIFF (.tif) or .img files to Cloud-Optimized GeoTIFF
    - Enables tiled access and compression
    - Preserves 16-bit radiometric depth
    - Adds overviews for efficient visualization
