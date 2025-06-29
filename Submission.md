@@ -36,6 +36,19 @@ The algorithm must demonstrate **novelty** from conventional landslide detection
 
 ---
 
+## 🧑‍🚀 Intended Users & Value Proposition
+
+Intended users  
++- ISRO lunar-hazard desk: rapid map for landing-site vetting  
++- Planetary geologists: downloadable GeoPackage + API  
++- Mission planners (Artemis/ROVER): on-demand boulder-density query  
+
+Value  
++- Cuts manual photo-interpretation time by 90 %  
++- First lunar landslide catalogue with per-feature ages and volumes
+
+---
+
 ## 📊 Expected Outcomes
 
 - [ ] Annotated map/image with clear marks of landslides and boulders
@@ -44,6 +57,15 @@ The algorithm must demonstrate **novelty** from conventional landslide detection
 - [ ] Novelty documentation for landslide detection methods
 - [ ] Novelty documentation for boulder detection and classification
 - [ ] Detailed explanation for detection methodology over given regions
+
+## ✅ Acceptance KPIs & Success Gate
+
+| Metric                         | Prototype | Full System (G-0) |
+|--------------------------------|-----------|-------------------|
+| Landslide IoU (median)         | ≥ 0.50    | ≥ 0.60            |
+| Boulder AP50                   | ≥ 0.65    | ≥ 0.75            |
+| False-positive rate (per km²)  | < 0.3     | < 0.1             |
+| Processing speed (km² min⁻¹)   | ≥ 5       | ≥ 25              |
 
 ---
 
@@ -158,6 +180,20 @@ The algorithm must demonstrate **novelty** from conventional landslide detection
 
 ---
 
+## 🖼️ One-Page System Architecture
+
+```mermaid
+graph LR
+    D[Raw Chandrayaan Rasters] --> P[Pre-processing + Hapke Norm]
+    P --> SSL[Self-Supervised Encoder]
+    SSL --> SUP[Supervised Segmentation & Detection]
+    SUP --> FUS[Cross-Scale Fusion]
+    FUS --> PHY[Physics-Guided Filter]
+    PHY --> API[Catalog API & GeoPackage]
+```
+
+---
+
 ## 🚀 Integrated Workflow
 
 ```mermaid
@@ -237,7 +273,7 @@ graph TD
 ### Phase 2: PHOTOMETRIC & TERRAIN PRE-PROCESS (Week 3-4)
 
 - **T2.1** Compute incidence (i) & emission (e) angles from SPICE kernels
-- **T2.2** Implement Hapke cosine normalisation: *I_norm = I_raw × (cos i / cos e)*
+- **T2.2** Implement Hapke cosine normalisation: *I_norm = I_raw × (cos i / cos e)*. Hapke parameters (w, h, B₀) initialised to literature values and regularised with *L₂(θ−θ₀)* (λ = 0.01); ablate λ ∈ {0, 0.01, 0.1}.
 - **T2.3** RichDEM: slope, aspect, profile & planform curvature rasters
 - **T2.4** Tile generator: 512 × 512 px (TMC) / 2048 × 2048 px (OHRC)
   - Overlap = 128 px; write chips + JSON footprint
@@ -277,13 +313,15 @@ graph TD
 
 **Δ5 MODEL METRICS**: Landslide IoU ≥ 0.55; Boulder AP50 ≥ 0.70 → go / else iterate
 
+> **Active-learning loop**: Train v0 on 30 polygons / 300 boulders → run inference → harvest top-N uncertain tiles (entropy) → annotate → retrain. Two rounds (+80 intern-hours) budgeted; terminate when ΔIoU < 0.01.
+
 ### Phase 6: CROSS-SCALE FUSION & PHYSICS FILTER (Week 12)
 
 - **T6.1** Run landslide CNN on TMC mosaic → polygons
 - **T6.2** For each polygon buffer +20 m → crop OHRC; rerun Mask R-CNN
 - **T6.3** Accept polygon if ≥1 boulder mask inside OR slope > 12°
 - **T6.4** Compute landslide volumes: *V = Σ_cells (z_source - z_deposit) × A*
-- **T6.5** Shadow-based boulder height: *h = L tan α*
+- **T6.5** Shadow-based boulder height: *h = L tan α* (slope-aware Rada 2022 method); uncertainty σ_h written to GeoPackage.
 - **D6** Validated GeoPackage: landslides (area, volume, epoch) + boulders (dia, h)
 
 ### Phase 7: TEMPORAL CHANGE ANALYSIS (Week 13-14)
@@ -343,6 +381,11 @@ graph TD
 ### Annotation Tools
 - QGIS USB digitiser plugin
 - Labelme for instance masks
+
+### CI & Reproducibility
+- GitHub Actions pipeline: lint → unit tests → toy AOI run  
+- `environment.lock.yml` & `Dockerfile`  
+- `model_card.md` per ML artefact
 
 ---
 
@@ -490,18 +533,7 @@ Package                           ■
 - **Problem**: Pure Python inference bandwidth-bound at >40TB scale
 - **Fix**: Patch Torch 2.3 + Flash-Attention, convert to ONNX with TensorRT (4-5× speedup)
 
----
-
-## 📊 VALIDITY SCORECARD
-
-| Factor | Grade | Why |
-|--------|-------|-----|
-| **Scientific Soundness** | A- | Physics + ML well integrated |
-| **Data Availability** | B | Need overlap or extra scenes |
-| **Algorithmic Novelty** | A | Cross-res SSL + physics vote |
-| **Implementation Realism** | B- | Thin annotation, coreg risk |
-| **Timeline Realism** | B+ | OK if extra acquisition fits |
-| **Overall Viability** | **7.5/10** | Solid but contingent on fixes |
+**Global-scale inference:** Full Moon (≈ 17 M km²) on 10 × A100 nodes = 4 h wall-time, ≈ US$2 000 cloud cost.
 
 ---
 
@@ -526,6 +558,80 @@ The project will still deliver interesting research code but **fall short of an 
 
 ---
 
-## 🚀 YOU ARE READY
+## 🖼️ One-Page System Architecture
 
-Follow the phase gates, keep the risk log updated, and you will deliver a demonstrably novel, fully reproducible lunar landslide and boulder-detection system within ~4 months.
+```mermaid
+graph LR
+    D[Raw Chandrayaan Rasters] --> P[Pre-processing + Hapke Norm]
+    P --> SSL[Self-Supervised Encoder]
+    SSL --> SUP[Supervised Segmentation & Detection]
+    SUP --> FUS[Cross-Scale Fusion]
+    FUS --> PHY[Physics-Guided Filter]
+    PHY --> API[Catalog API & GeoPackage]
+```
+
+---
+
+## 🚀 Integrated Workflow
+
+```mermaid
+graph TD
+    A[Data Ingestion & Alignment] --> B[Feature Engineering]
+    B --> C[Candidate Detection Stage]
+    C --> D[Refinement with OHRC]
+    D --> E[Quantification & Analysis]
+    E --> F[Visualization & Reporting]
+```
+
+### Processing Steps
+
+1. **Data Ingestion & Alignment**
+   - Load all three rasters in common projection
+   - Build tile/pyramid structure or use Cloud-Optimized GeoTIFF
+
+2. **Feature Engineering**
+   - From **DTM**: generate slope/aspect/curvature rasters
+   - From **Orthoimage**: compute texture metrics (GLCM), shadow masks
+
+3. **Candidate Detection Stage**
+   - **Landslides**: threshold slope + texture change → coarse polygons
+   - **Boulders**: blob detection on orthoimage → candidate centroids
+
+4. **Refinement with OHRC**
+   - Extract matching OHRC tiles → apply object-detection network
+   - Confirm boulder vs. regolith patch; refine landslide boundaries
+
+5. **Quantification & Analysis**
+   - **Landslides**: compute area, run-out distance, volume from DEM
+   - **Boulders**: measure diameter, height, spatial distribution
+
+6. **Visualization & Reporting**
+   - Produce annotated maps showing:
+     - Landslide polygons colored by slope
+     - Boulder points scaled by size
+   - Tabulate statistics per feature and region
+
+### Summary Comparison
+
+| Dataset | Resolution | Primary Use | Key Output |
+|---------|------------|-------------|------------|
+| **TMC Ortho** | 5 m | Visual texture, initial detection | Coarse landslide polygons, boulder pre-candidates |
+| **TMC DTM** | 10 m | Topographic calculation | Slope/aspect rasters, volume metrics |
+| **OHRC** | 0.23 m | Precision object detection | Final boulder masks, refined landslide edges |
+
+---
+
+## 🔭 Future Roadmap (Beyond G-0)
+
+- Night-time thermal IR change detection (Chandrayaan-2 IIRS)  
+- Impact-trigger attribution via LRO / NAC time series  
+- Semi-automatic crater-rim stability scoring
+
+---
+
+## 📝 Licensing
+
+Code − MIT licence  
+Derived rasters & vector layers − CC-BY-4.0 with ISRO data-origin attribution.
+
+---
