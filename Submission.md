@@ -54,6 +54,9 @@ Value
 - [ ] Annotated map/image with clear marks of landslides and boulders
 - [ ] Details about individual landslides (geometry, temporal occurrence)
 - [ ] Details about each boulder (length, diameter)
+- [ ] Origin point & scarp polygon for each landslide
+- [ ] `boulder_morpho.gpkg` with 12 morphometric fields
+- [ ] Hex-grid `ActiveRegion` layer + activity index raster
 - [ ] Novelty documentation for landslide detection methods
 - [ ] Novelty documentation for boulder detection and classification
 - [ ] Detailed explanation for detection methodology over given regions
@@ -66,6 +69,9 @@ Value
 | Boulder AP50                   | ≥ 0.65    | ≥ 0.75            |
 | False-positive rate (per km²)  | < 0.3     | < 0.1             |
 | Processing speed (km² min⁻¹)   | ≥ 5       | ≥ 25              |
+| Origin localisation error (median) | ≤ 50 m | ≤ 30 m           |
+| Boulder dia RMSE               | ≤ 20 %    | ≤ 15 %            |
+| Fresh-slide capture in ActiveRegion | ≥ 70 % | ≥ 80 %           |
 
 ---
 
@@ -322,14 +328,120 @@ graph TD
 - **T6.3** Accept polygon if ≥1 boulder mask inside OR slope > 12°
 - **T6.4** Compute landslide volumes: *V = Σ_cells (z_source - z_deposit) × A*
 - **T6.5** Shadow-based boulder height: *h = L tan α* (slope-aware Rada 2022 method); uncertainty σ_h written to GeoPackage.
+- **T6.6** Origin-Finder: score-based head-scarp extraction + boulder-chain vote.
 - **D6** Validated GeoPackage: landslides (area, volume, epoch) + boulders (dia, h)
+
+#### A. Head-Scarp / Origin Detection
+
+**Purpose**: Identify the detachment crown (head-scarp) and a single geodetic "origin point" for every validated landslide polygon.
+
+**Inputs**:
+- Landslide polygon \(P\) (output of T6.3)  
+- 5 m slope & curvature rasters  
+- CNN probability raster (LinkNet, Phase 5)  
+- ΔDEM raster (optional; Phase 7)  
+- Boulder chain vectors (Phase 6, linear regression on ≥ 3 blocks)
+
+**Algorithm (5 steps)**:
+1. Upslope mask: find dominant downslope azimuth \( \psi \) of \(P\); keep upslope half \(U\).  
+2. Head-scarp score raster  
+   \( S = 0.5\,z_\text{slope} + 0.3\,|z_\text{curv}| + 0.2\,z_{p_{\text{CNN}}} \)  
+   where each term is min-max-normalised inside \(U\).  
+3. Pixels with \(S ≥ P_{95}\) → cluster with DBSCAN (ε = 15 m, minPts = 10) → **ScarpZone**.  
+4. Intersect ScarpZone with ΔDEM < −3 m to filter spurious edges.  
+5. Project downhill boulder chains one kilometre upslope; first intersection with ScarpZone → **OriginPoint**.  
+   If no chains exist, take centroid of ScarpZone.
+
+**Outputs (GeoPackage fields)**:
+- `origin_x`, `origin_y` (EPSG:104903, metres)  
+- `origin_conf` (0-100, % of P95 pixels supporting cluster)  
+- `scarp_area_m2`  
+- `dist_centre_m` (Origin→polygon centroid)  
+
+**KPIs**:
+- Median Origin→manual-scarp distance:  
+  - Large slides (> 2 km): ≤ 30 m  
+  - Medium slides (0.4–2 km): ≤ 50 m  
+- Failure flag if `origin_conf < 40`.
+
+**Implementation notes**: Libraries: scikit-image, scikit-learn DBSCAN, rasterio.mask. Runtime: < 120 ms per landslide on T4 GPU (CPU code).
+
+#### B. Per-Boulder Morphometrics
+
+**Purpose**: Attach a physics-rich attribute table to every OHRC-resolved boulder.
+
+**Metrics & formulas**:
+
+| Field            | Type | Formula / method | Notes |
+|------------------|------|------------------|-------|
+| `area_m2`        | float | px_count × gsd² | gsd = 0.23 m |
+| `dia_m`          | float | \(2\sqrt{A/π}\) | Equivalent diameter |
+| `length_m`       | float | major_axis × gsd | Ellipse fit |
+| `width_m`        | float | minor_axis × gsd | — |
+| `elong`          | float | length / width  | Shape descriptor |
+| `circ`           | float | \(4πA / P²\) | Perimeter from mask |
+| `orient_deg`     | float | regionprops.orientation | 0° = east |
+| `height_m`       | float | shadow routine (§Rada 2022) | Slope-aware |
+| `h_sigma_m`      | float | error propagation | Validation |
+| `h_d_ratio`      | float | height / dia | Sanity & freshness |
+| `shadow_qc`      | int   | 0 = undefined, 1 = ok, 2 = crisp | Edge gradient |
+| `fresh_flag`     | bool  | (0.7 < h/d < 1.5) ∧ (circ < 0.6) | Two-trigger rule |
+| `slide_id`       | str   | FK to landslide polygon | — |
+
+**Output layer**: `boulder_morpho.gpkg`, EPSG 104903. One record ≈ 120 bytes; 50 000 boulders ≈ 6 MB.
+
+**Validation / KPI**: 
+- Shadow-height σ ≤ 0.35 m (target)  
+- ≥ 85 % of manual diameters within ±20 % of `dia_m`.
+
+**Libraries**: `skimage.measure`, `numpy`, custom `shadow_height.py` (vectorised). Batch inference of metrics: ≈ 2 s / 10 000 boulders on CPU.
 
 ### Phase 7: TEMPORAL CHANGE ANALYSIS (Week 13-14)
 
 - **T7.1** DEMcoreg (Nuth & Kääb) on multi-epoch DTMs
 - **T7.2** Produce Δz raster; threshold ±3 m → new scarp detection
 - **T7.3** Flag "recent" landslides where Δz overlaps CNN mask
+- **T7.4** Active-Region Scoring
 - **D7** Time-stamped activity layer
+
+#### C. Activity-Hot-Spot Index
+
+**Goal**: Produce a quantitative heat-map that spotlights dynamically active terrain at 480 m scale.
+
+**Grid**: 
+- Hexagonal H3 grid, resolution 7 (avg area ≈ 0.44 km²).  
+- Benefits: equal-area, fast spatial joins.
+
+**Per-hex features**:
+
+| Symbol | Description | Computation |
+|--------|-------------|-------------|
+| \(D_f\) | Fresh-boulder density | Σ `fresh_flag` / hex_area |
+| \(α\)   | SFD power-law slope | Fit log-log N(>d) vs d, d = 0.5–10 m |
+| \(F\)   | Recent-slide fraction | Slides with ΔDEM loss inside hex / total area |
+| \(G^\*\) | Getis-Ord z-score | PySAL, 8-NN weights |
+| \(L\)   | Mean landslide prob | Avg CNN prob inside hex |
+
+Normalise each term 0-1 (robust MAD scaler).  
+Composite activity index:
+
+\[
+A = 0.35D_f + 0.25F + 0.20G^\* + 0.20(1-α_\text{norm})
+\]
+
+(Flatter SFD → younger field → higher activity, so \(1-α_\text{norm}\)).  
+Hexes with \(A ≥ 0.90\) → **ActiveRegion = TRUE**.
+
+**Outputs**:
+- `hex_activity.geojson` (fields: `A`, `Df`, `F`, `Gstar`, `alpha`, `ActiveRegion`).  
+- `activity_heatmap.tif` (continuous raster, 30 m).  
+- `top10_active_cells.csv` (rank, centre_x, centre_y, A, driver term).
+
+**KPIs**:
+- At least 80 % of manually mapped **fresh** landslides overlap `ActiveRegion`.  
+- False-positive hex rate (no fresh activity, yet flagged) < 15 %.
+
+**Runtime & libs**: `h3-py`, `numpy`, `scipy.stats`, `pointpats`, `rasterio`. End-to-end for 20 × 20 km AOI: < 7 s on 8-core CPU.
 
 ### Phase 8: EXPLAINABLE & UNCERTAINTY MODULE (Week 15)
 
@@ -353,6 +465,27 @@ graph TD
   3. Cross-scale bootstrapping
 - **D10.3** Open-source code (MIT) + Dockerfile + README
 
+#### D. Visual & API Deliverables
+
+**Maps / Figures**:
+- "Origin pin & scarp envelope" inset per landslide (SVG).  
+- Boulder \(h/d\) vs diameter scatter, coloured by freshness.  
+- Hex-grid activity heat-map with 90-th percentile outline.
+
+**Web-API stub (Flask)**:
+`GET /activity?lat=…&lon=…&radius=…` → JSON:  
+```json
+{
+  "active_index": 0.92,
+  "fresh_boulder_density": 0.14,
+  "recent_slide_fraction": 0.33,
+  "nearest_origin_point": {
+      "dist_m": 87,
+      "confidence": 76
+  }
+}
+```
+
 ---
 
 ## ⚠️ RISK TABLE (Top 3)
@@ -362,6 +495,7 @@ graph TD
 | **Sub-meter co-registration fails** → DL mis-labels | High | Iterative closest-edge metric, manual GCPs in QGIS |
 | **Severe class imbalance** (few landslides) | High | Focal-Tversky loss, on-the-fly oversampling of positive tiles |
 | **Shadow confusion** at low sun angles | Medium | Incorporate sun-azimuth feature channel, shadow/illumination simulation data augmentation |
+| **Sparse fresh boulders in low-angle slides** | Medium | Mitigated by α-slope term in activity index |
 
 ---
 
